@@ -200,7 +200,6 @@ module.exports = {
 
         QRCode.toFile(`public/${file_location}`, QRCodeData, {}, function(err) {
             if (err) throw err
-            console.log('done')
         })
         return { doneQRCode: true, location: file_location };
     },
