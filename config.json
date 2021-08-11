@@ -1,0 +1,29 @@
+{
+    "app_name": "National Lotory authority",
+    "socket_port": 2021,
+    "site_link": "http://localhost:2021/",
+    "db_config": {
+        "host": "localhost",
+        "user": "root",
+        "password": "",
+        "database": "nla_master_db",
+        "debug": false,
+        "dateStrings": "date",
+        "multipleStatements": true
+    },
+    "email": {
+        "host": "server-host",
+        "port": 465,
+        "secure": true,
+        "auth": {
+            "user": "email@company.com",
+            "pass": "password"
+        },
+        "sender": "\"sender name\" < email @company.com > "
+    },
+    "sms": {
+        "host": "https://apps.mnotify.net/smsapi?",
+        "key": "api-key",
+        "sender": "Sender Name"
+    }
+}
