@@ -19,11 +19,11 @@
             "user": "email@company.com",
             "pass": "password"
         },
-        "sender": "\"sender name\" < email @company.com > "
+        "sender": "\"sender name\" <email@company.com> "
     },
     "sms": {
         "host": "https://apps.mnotify.net/smsapi?",
-        "key": "api-key",
-        "sender": "Sender Name"
+        "key": "SfnBr19znu402desDFXR7fq6w",
+        "sender": "Dsaved"
     }
 }

@@ -15,6 +15,7 @@ const { createCanvas, loadImage } = require("canvas")
 //database tables
 const users_table = "users";
 const license_table = "license";
+const vendor_license_table = "vendor_license";
 
 module.exports = {
     formatMessage: function(html, data) {
@@ -93,59 +94,6 @@ module.exports = {
     decode: function(base64String) {
         return Buffer.from(base64String, 'base64').toString('ascii');
     },
-    genQRCodeBK: async function(agent_code, vendor) {
-        let agent = null
-
-        //GET AGENT DETAILS
-        const db = new mysql(conf.db_config);
-        await db.query(`SELECT 
-        user.id,
-        user.name,
-        user.phone,
-        user.gender,
-        user.address,
-        user.account_type,
-        user.code,
-        user.status,
-        user.created,
-        lc.license_type,
-        lc.vendor_limit,
-        lc.acquired,
-        lc.expires
-        FROM ${users_table} user LEFT JOIN ${license_table} lc ON user.id=lc.user_id 
-        WHERE user.account_type = 'agent' AND user.code=${agent_code} ORDER BY id DESC`);
-
-        if (db.count() > 0) {
-            agent = db.first();
-            const endDate = new Date(agent.expires);
-            const today = new Date();
-            var diff = this.getDateDiff(today, endDate);
-            agent.days_left = diff
-            agent.license_status = "Expired"
-            if (agent.expires === null) {
-                agent.license_status = "No License"
-                agent.days_left = 0;
-            } else if (agent.expires !== null && agent.days_left > 0) {
-                agent.license_status = "Active"
-            }
-        } else {
-            return { doneQRCode: false, location: null };
-        }
-        try {
-            if (fs.existsSync(`./init_non_logo_qr.png`)) {
-                fs.unlinkSync(`./init_non_logo_qr.png`);
-            }
-        } catch (err) {
-            console.log(err)
-        }
-
-        console.error(vendor)
-        const file_location = `qr-codes/${vendor.phone}-${Date.now()}.png`
-        const QRCodeData = `{agent:{name:'${agent.name}',phone:'${agent.phone}',code:'${agent.code}'},license:{type:'${agent.license_type}',acquired:'${agent.acquired}',expires:'${agent.expires}'},vendor:{name:'${vendor.name}',phone:'${vendor.phone}',status:'${vendor.status}'}}`
-            // const EncryptedData = this.encode(QRCodeData)
-        await QRLogo.generateQRWithLogo(QRCodeData, "logo.png", {}, "PNG", `public/${file_location}`)
-        return { doneQRCode: true, location: file_location };
-    },
     genQRCode: async function(agent_code, vendor) {
         const width = 300
         const cwidth = 100
@@ -154,22 +102,43 @@ module.exports = {
 
         //GET AGENT DETAILS
         const db = new mysql(conf.db_config);
-        await db.query(`SELECT 
-        user.id,
-        user.name,
-        user.phone,
-        user.gender,
-        user.address,
-        user.account_type,
-        user.code,
-        user.status,
-        user.created,
-        lc.license_type,
-        lc.vendor_limit,
-        lc.acquired,
-        lc.expires
-        FROM ${users_table} user LEFT JOIN ${license_table} lc ON user.id=lc.user_id 
-        WHERE user.account_type = 'agent' AND user.code=${agent_code} ORDER BY id DESC`);
+
+        if (agent_code === "00000000") {
+            await db.query(`SELECT 
+            user.id,
+            user.name,
+            user.phone,
+            user.gender,
+            user.address,
+            user.account_type,
+            user.agent_code code,
+            user.status,
+            user.created,
+            lc.license_type,
+            lc.status lc_status,
+            lc.acquired,
+            lc.expires
+            FROM ${users_table} user LEFT JOIN ${vendor_license_table} lc ON user.id=lc.user_id 
+            WHERE user.account_type = 'vendor' AND user.phone=${vendor.phone} ORDER BY lc.id DESC`);
+        } else {
+            await db.query(`SELECT 
+            user.id,
+            user.name,
+            user.phone,
+            user.gender,
+            user.address,
+            user.account_type,
+            user.code,
+            user.status,
+            user.created,
+            lc.license_type,
+            lc.status lc_status,
+            lc.vendor_limit,
+            lc.acquired,
+            lc.expires
+            FROM ${users_table} user LEFT JOIN ${license_table} lc ON user.id=lc.user_id 
+            WHERE user.account_type = 'agent' AND user.code=${agent_code} ORDER BY lc.id DESC`);
+        }
 
         if (db.count() > 0) {
             agent = db.first();
@@ -182,7 +151,7 @@ module.exports = {
                 agent.license_status = "No License"
                 agent.days_left = 0;
             } else if (agent.expires !== null && agent.days_left > 0) {
-                agent.license_status = "Active"
+                agent.license_status = agent.lc_status
             }
         } else {
             return { doneQRCode: false, location: null };
@@ -196,7 +165,12 @@ module.exports = {
         }
 
         const file_location = `qr-codes/${vendor.phone}-${Date.now()}.png`
-        const QRCodeData = `{agent:{name:'${agent.name}',phone:'${agent.phone}',code:'${agent.code}'},license:{type:'${agent.license_type}',acquired:'${agent.acquired}',expires:'${agent.expires}'},vendor:{name:'${vendor.name}',phone:'${vendor.phone}',status:'${vendor.status}'}}`
+        let QRCodeData = '';
+        if (agent_code === "00000000") {
+            QRCodeData = `{agent:{name:'System Agent',phone:'0000000000',code:'00000000'},license:{status:'${agent.license_status}',type:'${agent.license_type}',acquired:'${agent.acquired}',expires:'${agent.expires}'},vendor:{name:'${vendor.name}',phone:'${vendor.phone}',status:'${vendor.status}'}}`
+        } else {
+            QRCodeData = `{agent:{name:'${agent.name}',phone:'${agent.phone}',code:'${agent.code}'},license:{status:'${agent.license_status}',type:'${agent.license_type}',acquired:'${agent.acquired}',expires:'${agent.expires}'},vendor:{name:'${vendor.name}',phone:'${vendor.phone}',status:'${vendor.status}'}}`
+        }
 
         QRCode.toFile(`public/${file_location}`, QRCodeData, {}, function(err) {
             if (err) throw err
@@ -264,5 +238,12 @@ module.exports = {
                     reject(error);
                 });
         });
-    }
+    },
+    formatMoney(money) {
+        var formater = new Intl.NumberFormat('en-US', {
+            style: 'currency',
+            currency: 'GHs'
+        })
+        return formater.format(money)
+    },
 }

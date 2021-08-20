@@ -3,7 +3,8 @@ const AuthController = require('./controllers/auth')
 const GeneralController = require('./controllers/gen')
 const PolicyController = require('./controllers/policy')
 const AgentController = require('./controllers/agent')
-const AdminController = require('./controllers/admin')
+const AdminController = require('./controllers/admin');
+const VendorController = require('./controllers/vendor');
 
 module.exports = function(app) {
     //General Routes
@@ -12,6 +13,12 @@ module.exports = function(app) {
     app.post('/verify_number', AuthController.verify_number)
     app.post('/resend_code', AuthController.resend_code)
     app.post('/recover', AuthController.recover)
+
+    app.post('/vendor-register', AuthController.vendorRegister)
+
+    app.post('/flutterwave/payment-callback', GeneralController.flutterwaveCallBack)
+    app.post('/flutterwave/payment', GeneralController.makePayment)
+    app.post('/flutterwave/verify-payment', GeneralController.verifyPayment)
 
     //General Routes authenticated
     app.post('/role-options', authorizer, GeneralController.roleOptions)
@@ -42,6 +49,14 @@ module.exports = function(app) {
     app.post('/agent/add-vendor', authorizer, AgentController.addVendor)
     app.post('/agent/update-vendor', authorizer, AgentController.updateVendor)
 
+    //Vendor page
+    app.post('/vendor/get-vendor', authorizer, VendorController.getVendor)
+    app.post('/vendor/update-vendor', authorizer, VendorController.updateVendor)
+    app.post('/vendor/get-licenses', authorizer, VendorController.getLicenses)
+
+    app.post('/vendor/grant-vendor-lincense', authorizer, VendorController.grantVendorLicense)
+    app.post('/vendor/revoke-vendor-lincense', authorizer, VendorController.revokeVendorLicense)
+
     //Admin pages
     app.post('/admin/add-agent', authorizer, AdminController.addAgent)
     app.post('/admin/update-agent', authorizer, AdminController.updateAgent)
@@ -50,6 +65,19 @@ module.exports = function(app) {
     app.post('/admin/get-agent', authorizer, AdminController.getAgent)
     app.post('/admin/get-vendors', authorizer, AdminController.getVendors)
     app.post('/admin/get-vendor', authorizer, AdminController.getVendor)
+
+    app.post('/admin/get-vendor-licenses', authorizer, AdminController.getVendorLicenses)
+    app.post('/admin/get-vendor-license', authorizer, AdminController.getVendorLicense)
+    app.post('/admin/add-vendor-license', authorizer, AdminController.addVendorLicense)
+    app.post('/admin/update-vendor-license', authorizer, AdminController.updateVendorLicense)
+    app.post('/admin/delete-vendor-license', authorizer, AdminController.deleteVendorLicenses)
+
+    app.post('/admin/get-transactions', authorizer, AdminController.getTransactions)
+    app.post('/admin/get-transaction', authorizer, AdminController.getTransaction)
+
+    app.post('/admin/grant-agent-lincense', authorizer, AdminController.grantAgentLicense)
+    app.post('/admin/revoke-agent-lincense', authorizer, AdminController.revokeAgentLicense)
+    app.post('/admin/activate-agent-license', authorizer, AdminController.activateAgentLicense)
         //user section
     app.post('/admin/get-users', authorizer, AdminController.getAdminUsers)
     app.post('/admin/get-user', authorizer, AdminController.getAdminUser)

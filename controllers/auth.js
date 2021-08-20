@@ -12,7 +12,8 @@ const verification_table = "users_table_verification";
 const users_page_table = "users_page";
 const users_role_table = "users_role";
 const agentPages = ['Agents Dashboard', 'Vendors', 'Terminate Request', 'Print QRCodes']
-const agentPermissions = ['create', 'read', 'update', 'delete']
+const vendorPages = ['Vendor Dashboard', 'My Account', 'Buy License']
+const agentPermissions = ['create', 'read', 'update']
 
 module.exports = {
     async login(request, response) {
@@ -23,7 +24,7 @@ module.exports = {
             const password = params.password;
 
             const db = new mysql(conf.db_config)
-            const queryString = `select id,name,phone,password, gender, address, code, account_type,status, role from ${users_table} where phone = '${user}' AND status='Active'`;
+            const queryString = `select id,name,phone,password, gender, address, code, account_type,status, role from ${users_table} where phone = '${user}' AND status='Active' AND account_type!='system'`;
 
             await db.query(queryString);
             if (db.count() > 0) {
@@ -45,6 +46,20 @@ module.exports = {
                     if (userdata.account_type === 'agent') {
                         user.code = userdata.code
                         user.pages = agentPages
+                        user.permissions = agentPermissions
+                        await db.query(`select phone, code from ${verification_table} where phone = '${userdata.phone}'`);
+                        if (db.count() > 0) {
+                            const verifyPhone = db.first();
+                            if (Number(verifyPhone.code) != 1) {
+                                const smsCode = functions.numberCode(6);
+                                await db.update(`${verification_table}`, "phone", userdata.phone, { code: smsCode });
+                                await functions.sendSMS(userdata.phone, `Your one time password is: ${smsCode} Please do not share with anyone`)
+                                should_verify = true;
+                            }
+                        }
+                    }
+                    if (userdata.account_type === 'vendor') {
+                        user.pages = vendorPages
                         user.permissions = agentPermissions
                         await db.query(`select phone, code from ${verification_table} where phone = '${userdata.phone}'`);
                         if (db.count() > 0) {
@@ -156,6 +171,86 @@ module.exports = {
                 await functions.sendSMS(phone, `Your one time password is: ${smsCode} Please do not share with anyone`)
                 should_verify = true
             }
+            response.status(200).json({
+                success: true,
+                should_verify: should_verify,
+                message: 'Account created successfully'
+            });
+        } else {
+            response.status(200).json({
+                success: false,
+                message: 'Could not create account'
+            });
+        }
+    },
+    async vendorRegister(request, response) {
+        const params = request.body;
+        const db = new mysql(conf.db_config);
+
+        const name = (params.name) ? params.name : null;
+        const phone = (params.phone) ? params.phone : null;
+        const password = (params.password) ? params.password : null;
+        const account_type = (params.account_type) ? params.account_type : "vendor";
+
+        if (!name) {
+            response.status(403).json({
+                message: 'Please provide name',
+                success: false
+            });
+            return;
+        }
+        if (!phone) {
+            response.status(403).json({
+                message: 'Please provide phone',
+                success: false
+            });
+            return;
+        }
+        if (!account_type) {
+            response.status(403).json({
+                message: 'Please provide account type',
+                success: false
+            });
+            return;
+        }
+        if (!password) {
+            response.status(403).json({
+                message: 'Please provide password',
+                success: false
+            });
+            return;
+        }
+
+        await db.query(`select phone from ${users_table} where phone = '${phone}'`);
+        if (db.count() > 0) {
+            response.status(403).json({
+                message: 'this phone already exist',
+                success: false
+            });
+            return;
+        }
+
+        let insertData = {
+            name: name,
+            phone: phone,
+            agent_code: "00000000",
+            account_type: account_type,
+            password: await encrypt.hash(password),
+        }
+
+        const done = await db.insert(users_table, insertData);
+        if (done) {
+            let should_verify = false;
+            const smsCode = functions.numberCode(6);
+            await db.query(`select phone from ${verification_table} where phone = '${phone}'`);
+            if (db.count() > 0) {
+                await db.update(`${verification_table}`, "phone", phone, { phone: phone, code: smsCode });
+            } else {
+                await db.insert(`${verification_table}`, { phone: phone, code: smsCode });
+            }
+            await functions.sendSMS(phone, `Your one time password is: ${smsCode} Please do not share with anyone`)
+            should_verify = true
+
             response.status(200).json({
                 success: true,
                 should_verify: should_verify,

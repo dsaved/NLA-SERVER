@@ -17,30 +17,82 @@ module.exports = {
     async getDashboardData(request, response) {
         const params = request.body;
         const db = new mysql(conf.db_config);
-        const id = (params.id) ? params.id : null;
+        const agentid = (params.id) ? params.id : null;
+        const agent_code = (params.agent_code) ? params.agent_code : null;
 
         //TODO get dashboard info
-        if (!id) {
+        if (!agentid) {
             response.status(403).json({
-                message: 'Please provide id',
+                message: 'Please provide agent id',
+                success: false
+            });
+            return;
+        }
+        if (!agent_code) {
+            response.status(403).json({
+                message: 'Please provide agent_code',
                 success: false
             });
             return;
         }
 
-        await db.query(`SELECT * FROM ${users_role_table} WHERE id=${id} ORDER BY id `);
-        if (db.count() > 0) {
-            let role = db.first()
-            response.status(200).json({
-                success: true,
-                role: role,
-            });
-        } else {
-            response.status(200).json({
-                success: false,
-                message: 'No role found',
-            });
+        stats = {
+            vendor_count: 0,
+            vendor_count_inactive: 0,
+            license: { expires: '0000-00-00', remaining: 0, status: 'Unknown' },
+            account: { status: 'Unknwon', created: '0000-00-00' }
         }
+
+        await db.query(` SELECT (SELECT COUNT(DISTINCT (phone)) FROM ${users_table} WHERE account_type = 'vendor' and agent_code='${agent_code}') vendor_count`);
+        if (db.count() > 0) {
+            stats.vendor_count = db.first().vendor_count;
+        }
+
+        await db.query(` SELECT (SELECT COUNT(DISTINCT (phone)) FROM ${users_table} WHERE account_type = 'vendor' and agent_code='${agent_code}' AND status!='Active') vendor_count`);
+        if (db.count() > 0) {
+            stats.vendor_count_inactive = db.first().vendor_count;
+        }
+
+        await db.query(`SELECT 
+        user.id,
+        user.name,
+        user.phone,
+        user.gender,
+        user.address,
+        user.account_type,
+        user.code,
+        user.status,
+        user.created,
+        lc.license_type,
+        lc.status lc_status,
+        lc.id license_id,
+        lc.vendor_limit,
+        lc.acquired,
+        lc.expires
+        FROM ${users_table} user LEFT JOIN ${license_table} lc ON user.id=lc.user_id WHERE user.id= ${agentid} AND account_type='agent' ORDER BY lc.id DESC`);
+
+        if (db.count() > 0) {
+            let agent = db.first()
+            const endDate = new Date(agent.expires);
+            const today = new Date();
+            var diff = functions.getDateDiff(today, endDate);
+            stats.license.remaining = diff
+            stats.license.status = "Expired"
+            if (agent.expires === null) {
+                stats.license.status = "No License"
+                stats.license.remaining = 0
+            } else if (agent.expires !== null && stats.license.remaining > 0) {
+                stats.license.status = agent.lc_status
+            }
+            stats.license.expires = agent.expires.split(' ')[0]
+            stats.account.status = agent.status;
+            stats.account.created = agent.created.split(' ')[0];
+        }
+
+        response.status(200).json({
+            success: true,
+            stats: stats,
+        });
     },
     async addVendor(request, response) {
         const params = request.body;
@@ -122,12 +174,14 @@ module.exports = {
             return;
         }
 
-        await db.query(`select (select Count(*) from ${users_table} where account_type = 'vendor' and agent_code='${agent_code}' ) vendors, lt.* from ${license_table} lt where lt.user_id = (select id from ${users_table} where code = '${agent_code}' LIMIT 1)`);
+        await db.query(`select (select Count(*) from ${users_table} where account_type = 'vendor' and agent_code='${agent_code}' ) vendors, lt.* from ${license_table} lt where lt.user_id = (select id from ${users_table} where code = '${agent_code}' ORDER BY lt.id DESC LIMIT 1)`);
         if (db.count() > 0) {
             const agentInfo = db.first();
             const endDate = new Date(agentInfo.expires);
             const today = new Date();
             var diff = functions.getDateDiff(today, endDate);
+
+            // you cannot add vendor when license has expired
             if (diff <= 0) {
                 response.status(403).json({
                     message: 'Agent license has expired',
@@ -136,6 +190,7 @@ module.exports = {
                 return;
             }
 
+            // you cannot add vendor when limit is riched
             if (Number(agentInfo.vendors) >= Number(agentInfo.vendor_limit)) {
                 response.status(403).json({
                     message: 'Vendor limit reached, you are not allowed to add anymore vendor',

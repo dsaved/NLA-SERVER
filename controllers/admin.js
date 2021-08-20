@@ -12,6 +12,9 @@ const users_map_location = "users_map_location";
 const license_table = "license";
 const users_role_table = "users_role";
 const users_page_table = "users_page";
+const vendor_licenses = "vendor_licenses";
+const transactions = "transactions";
+const vendor_license_table = "vendor_license";
 
 module.exports = {
     //agent section
@@ -230,10 +233,11 @@ module.exports = {
         user.status,
         user.created,
         lc.license_type,
+        lc.status lc_status,
         lc.vendor_limit,
         lc.acquired,
         lc.expires
-        FROM ${users_table} user LEFT JOIN ${license_table} lc ON user.id=lc.user_id ${condition} ORDER BY user.id DESC `);
+        FROM ${users_table} user LEFT JOIN ${license_table} lc ON user.id=lc.user_id ${condition} ORDER BY user.id, lc.id DESC `);
         paging.result_per_page(PAGE_SIZE);
         paging.pageNum(page)
 
@@ -251,7 +255,7 @@ module.exports = {
                     agents[index].license_status = "No License"
                     agents[index].days_left = 0
                 } else if (agent.expires !== null && agent.days_left > 0) {
-                    agents[index].license_status = "Active"
+                    agent.license_status = agent.lc_status
                 }
             }
             response.status(200).json({
@@ -284,10 +288,12 @@ module.exports = {
         user.status,
         user.created,
         lc.license_type,
+        lc.status lc_status,
+        lc.id license_id,
         lc.vendor_limit,
         lc.acquired,
         lc.expires
-        FROM ${users_table} user LEFT JOIN ${license_table} lc ON user.id=lc.user_id WHERE user.id= ${agentid} AND account_type='agent'`);
+        FROM ${users_table} user LEFT JOIN ${license_table} lc ON user.id=lc.user_id WHERE user.id= ${agentid} AND account_type='agent' ORDER BY lc.id DESC`);
 
         if (db.count() > 0) {
             let agent = db.first()
@@ -300,7 +306,7 @@ module.exports = {
                 agent.license_status = "No License"
                 agent.days_left = 0
             } else if (agent.expires !== null && agent.days_left > 0) {
-                agent.license_status = "Active"
+                agent.license_status = agent.lc_status
             }
             response.status(200).json({
                 success: true,
@@ -402,6 +408,28 @@ module.exports = {
                 const agent = db.first();
                 vendor.agent = { label: `${agent.name} (${agent.code})`, value: agent.code };
             }
+
+            if (vendor.code === '00000000') {
+                await db.query(`SELECT * FROM ${vendor_license_table} WHERE user_id=${vendor.id}`)
+                if (db.count() > 0) {
+                    const license = db.first();
+                    const endDate = new Date(license.expires);
+                    const today = new Date();
+                    var diff = functions.getDateDiff(today, endDate);
+                    vendor.days_left = diff
+                    vendor.license_status = "Expired"
+                    if (license.expires === null) {
+                        vendor.license_status = "No License"
+                        vendor.days_left = 0
+                    } else if (license.expires !== null && vendor.days_left > 0) {
+                        vendor.license_status = license.status
+                    }
+                    vendor.license_type = license.license_type
+                    vendor.acquired = license.acquired
+                    vendor.expires = license.expires
+                    vendor.license_id = license.id
+                }
+            }
             response.status(200).json({
                 success: true,
                 vendor: vendor,
@@ -410,6 +438,115 @@ module.exports = {
             response.status(200).json({
                 success: false,
                 message: 'No vendor found',
+            });
+        }
+    },
+    async activateAgentLicense(request, response) {
+        const params = request.body;
+        const db = new mysql(conf.db_config);
+        const agent_id = (params.id) ? params.id : null;
+        const license_type = (params.license_type) ? params.license_type : null;
+        const vendor_limit = (params.vendor_limit) ? params.vendor_limit : null;
+        const acquired = (params.acquired) ? params.acquired : null;
+
+        const acquiredDate = acquired.split('T')[0]
+        const dateArray = acquiredDate.split('-')
+
+        function pad(s) { return (s < 10) ? '0' + s : s; }
+
+        //expires add 1 year to acquired date.
+        var d = new Date(dateArray[0], dateArray[1], dateArray[2]);
+        d.setFullYear(d.getFullYear() + 1)
+        const expires = d.getFullYear() + '-' + pad(d.getMonth()) + '-' + pad(d.getDate());
+
+        await db.query(`SELECT * FROM ${license_table} WHERE DATE(expires) > DATE(NOW()) AND user_id=${agent_id}`);
+        if (db.count() > 0) {
+            response.status(200).json({
+                success: false,
+                message: 'This agent has an active license',
+            });
+        } else {
+            const insertData = {
+                user_id: agent_id,
+                license_type: license_type,
+                vendor_limit: vendor_limit,
+                acquired: acquired,
+                expires: expires,
+            }
+
+            const done = await db.insert(license_table, insertData);
+            if (done) {
+                response.status(200).json({
+                    success: true,
+                    message: 'License activated successfully'
+                });
+            } else {
+                response.status(200).json({
+                    success: false,
+                    message: 'failed to activate license'
+                });
+            }
+        }
+    },
+    async grantAgentLicense(request, response) {
+        const params = request.body;
+        const db = new mysql(conf.db_config);
+        const id = (params.id) ? params.id : null;
+        const license_id = (params.license_id) ? params.license_id : null;
+
+        if (!id) {
+            response.status(403).json({
+                message: 'please provide agent id',
+                success: false
+            });
+            return;
+        }
+        if (!license_id) {
+            response.status(403).json({
+                message: 'please provide license id',
+                success: false
+            });
+            return;
+        }
+
+        const done = await db.update(license_table, 'id', license_id, { status: 'Active' });
+        if (done) {
+            module.exports.getAgent(request, response);
+        } else {
+            response.status(200).json({
+                success: false,
+                message: 'Could not grant account'
+            });
+        }
+    },
+    async revokeAgentLicense(request, response) {
+        const params = request.body;
+        const db = new mysql(conf.db_config);
+        const id = (params.id) ? params.id : null;
+        const license_id = (params.license_id) ? params.license_id : null;
+
+        if (!id) {
+            response.status(403).json({
+                message: 'please provide agent id',
+                success: false
+            });
+            return;
+        }
+        if (!license_id) {
+            response.status(403).json({
+                message: 'please provide license id',
+                success: false
+            });
+            return;
+        }
+
+        const done = await db.update(license_table, 'id', license_id, { status: 'Revoked' });
+        if (done) {
+            module.exports.getAgent(request, response);
+        } else {
+            response.status(200).json({
+                success: false,
+                message: 'Could not revoke account'
             });
         }
     },
@@ -705,28 +842,101 @@ module.exports = {
     async getDashboardData(request, response) {
         const params = request.body;
         const db = new mysql(conf.db_config);
-        const id = (params.id) ? params.id : null;
+        const user_id = (params.user_id) ? params.user_id : null;
 
-        //TODO get dashboard info
-        if (!id) {
-            response.status(403).json({
-                message: 'Please provide id',
-                success: false
-            });
-            return;
+        // REGISTRATION STATS STARTS HERE
+        let registration_stat = {
+            stats_for: `${new Date().getFullYear()} Stats`,
+            name: 'System registration by months',
+            stats: [{ name: 'Registrations', data: [] }]
+        }
+        let stats_data = [null, null, null, null, null, null, null, null, null, null, null, null]
+
+        await db.query(`SELECT COUNT(id) as count, MONTH(created) as month FROM ${users_table} WHERE account_type!='admin' AND account_type!='system' GROUP BY MONTH(created) Order By created DESC LIMIT 12`);
+        const results1 = db.results();
+        for (let index = 0; index < results1.length; index++) {
+            const result = results1[index];
+            stats_data[result.month - 1] = result.count
         }
 
-        await db.query(`SELECT * FROM ${users_role_table} WHERE id=${id} ORDER BY id `);
+        for (let index = 0; index < stats_data.length; index++) {
+            const value = stats_data[index];
+            if (value === null && index < new Date().getMonth() + 1) {
+                stats_data[index] = 0
+            }
+        }
+        registration_stat.stats[0].data = stats_data
+
+        //AGENT STATS STARTS HERE
+        let agent_stat = {
+            name: 'Top 5 agent with most vendors',
+            stats: [{ name: 'count', data: [] }],
+            categories: [],
+        }
+        let agent_stat_data = [null, null, null, null, null]
+        let categories = ['', '', '', '', '']
+
+        await db.query(`SELECT COUNT(id) as count, agent_code FROM ${users_table} WHERE account_type!='admin' AND account_type!='agent' AND account_type!='system' GROUP BY agent_code LIMIT 5`);
+        const results2 = db.results();
+        for (let index = 0; index < results2.length; index++) {
+            const result = results2[index];
+            agent_stat_data[index] = result.count
+            categories[index] = result.agent_code
+        }
+
+        for (let index = 0; index < agent_stat_data.length; index++) {
+            const value = agent_stat_data[index];
+            if (value === null && index < new Date().getMonth() + 1) {
+                agent_stat_data[index] = 0
+            }
+        }
+        agent_stat.stats[0].data = agent_stat_data
+
+        for (let index = 0; index < categories.length; index++) {
+            const cat = categories[index];
+            await db.query(`SELECT name FROM ${users_table} WHERE code='${cat}'`)
+            if (db.count() > 0) {
+                categories[index] = db.first().name;
+            }
+        }
+        agent_stat.categories = categories
+
+        // ADMIN, VENDOR ,AGENT COUNTS STARTS HERE
+        let count_stat = { agent_count: 0, vendor_count: 0, admin_count: 0 }
+        await db.query(`
+        SELECT
+        (SELECT COUNT(DISTINCT (phone)) FROM ${users_table} WHERE account_type = 'agent') agent_count,
+        (SELECT COUNT(DISTINCT (phone)) FROM ${users_table} WHERE account_type = 'vendor') vendor_count,
+        (SELECT COUNT(DISTINCT (phone)) FROM ${users_table} WHERE account_type = 'admin') admin_count
+        `);
         if (db.count() > 0) {
-            let role = db.first()
+            count_stat = db.first();
+        }
+
+        // INACTIVE ADMIN, VENDOR ,AGENT COUNTS STARTS HERE
+        let inactive_count_stat = { agent_count: 0, vendor_count: 0, admin_count: 0 }
+        await db.query(`
+        SELECT
+        (SELECT COUNT(DISTINCT (phone)) FROM ${users_table} WHERE account_type = 'agent' AND status!='Active') agent_count,
+        (SELECT COUNT(DISTINCT (phone)) FROM ${users_table} WHERE account_type = 'vendor' AND status!='Active') vendor_count,
+        (SELECT COUNT(DISTINCT (phone)) FROM ${users_table} WHERE account_type = 'admin' AND status!='Active') admin_count
+         `);
+        if (db.count() > 0) {
+            inactive_count_stat = db.first();
+        }
+
+        // await db.query(`SELECT * FROM ${users_role_table} WHERE id=${id} ORDER BY id `);
+        if (db.count() > 0) {
             response.status(200).json({
-                success: true,
-                role: role,
+                count_stat: count_stat,
+                inactive_count_stat: inactive_count_stat,
+                registration_stat: registration_stat,
+                agent_stat: agent_stat,
             });
         } else {
             response.status(200).json({
                 success: false,
-                message: 'No role found',
+                message: 'No statistics available',
             });
         }
     },
@@ -901,6 +1111,297 @@ module.exports = {
             response.status(200).json({
                 success: false,
                 message: 'Could not update role'
+            });
+        }
+    },
+
+    // MANAGE VENDOR LICENSES
+    async getVendorLicenses(request, response) {
+        const params = request.body;
+        const search = (params.search) ? params.search : null;
+        let PAGE_SIZE = (params.result_per_page) ? Number(params.result_per_page) : 15;
+        let page = (params.page) ? Number(params.page) : 1;
+
+        let condition = `WHERE 1`;
+        if (search) {
+            condition += ` AND type LIKE '%${search}%' `;
+        }
+
+        const paging = new Pagination(conf.db_config);
+        paging.rawQuery(`select * from ${vendor_licenses} ${condition} ORDER BY id DESC `)
+        paging.result_per_page(PAGE_SIZE);
+        paging.pageNum(page)
+
+        await paging.run();
+        if (paging.count() > 0) {
+            let results = paging.results();
+            for (let index = 0; index < results.length; index++) {
+                const element = results[index];
+                results[index].price = functions.formatMoney(element.price);
+            }
+            response.status(200).json({
+                success: true,
+                licenses: results,
+                pagination: paging.pagination()
+            });
+        } else {
+            response.status(200).json({
+                success: false,
+                message: 'No license available',
+                pagination: paging.pagination()
+            });
+        }
+        paging.reset();
+    },
+    async getVendorLicense(request, response) {
+        const params = request.body;
+        const db = new mysql(conf.db_config);
+        const id = (params.id) ? params.id : null;
+
+        if (!id) {
+            response.status(403).json({
+                message: 'Please provide id',
+                success: false
+            });
+            return;
+        }
+
+        await db.query(`SELECT * FROM ${vendor_licenses} WHERE id=${id} ORDER BY id `);
+        if (db.count() > 0) {
+            let license = db.first()
+            response.status(200).json({
+                success: true,
+                license: license,
+            });
+        } else {
+            response.status(200).json({
+                success: false,
+                message: 'No license found',
+            });
+        }
+    },
+    async addVendorLicense(request, response) {
+        const params = request.body;
+        const db = new mysql(conf.db_config);
+
+        const type = (params.type) ? params.type : null;
+        const desc = (params.desc) ? params.desc : null;
+        const price = (params.price) ? params.price : null;
+
+        if (!type) {
+            response.status(403).json({
+                message: 'Please provide type',
+                success: false
+            });
+            return;
+        }
+        if (!desc) {
+            response.status(403).json({
+                message: 'Please provide desc',
+                success: false
+            });
+            return;
+        }
+        if (!price) {
+            response.status(403).json({
+                message: 'Please provide price',
+                success: false
+            });
+            return;
+        }
+
+        const insertData = {
+            type: type,
+            description: desc,
+            price: price,
+        }
+
+        const done = await db.insert(vendor_licenses, insertData);
+        if (done) {
+            response.status(200).json({
+                success: true,
+                message: 'License created successfully'
+            });
+        } else {
+            response.status(200).json({
+                success: false,
+                message: 'Could not create license'
+            });
+        }
+    },
+    async updateVendorLicense(request, response) {
+        const params = request.body;
+        const db = new mysql(conf.db_config);
+
+        const id = (params.id) ? params.id : null;
+        const type = (params.type) ? params.type : null;
+        const desc = (params.desc) ? params.desc : null;
+        const price = (params.price) ? params.price : null;
+
+        if (!id) {
+            response.status(403).json({
+                message: 'Please provide id',
+                success: false
+            });
+            return;
+        }
+        if (!type) {
+            response.status(403).json({
+                message: 'Please provide type',
+                success: false
+            });
+            return;
+        }
+        if (!desc) {
+            response.status(403).json({
+                message: 'Please provide desc',
+                success: false
+            });
+            return;
+        }
+        if (!price) {
+            response.status(403).json({
+                message: 'Please provide price',
+                success: false
+            });
+            return;
+        }
+
+        const insertData = {
+            type: type,
+            description: desc,
+            price: price,
+        }
+
+        const done = await db.update(vendor_licenses, 'id', id, insertData);
+        if (done) {
+            response.status(200).json({
+                success: true,
+                message: 'License updated successfully'
+            });
+        } else {
+            response.status(200).json({
+                success: false,
+                message: 'Could not updated license'
+            });
+        }
+    },
+    async deleteVendorLicenses(request, response) {
+        const params = request.body;
+        const db = new mysql(conf.db_config);
+        const recordid = (params.id) ? params.id : null;
+
+        if (!recordid) {
+            response.status(403).json({
+                message: 'Please provide id or [ids]',
+                success: false
+            });
+            return;
+        }
+
+        const done = await db.delete(vendor_licenses, `WHERE id IN (${recordid.join(',')})`);
+        if (done) {
+            response.status(200).json({
+                success: true,
+                message: 'Record deleted successfully'
+            });
+        } else {
+            response.status(200).json({
+                success: false,
+                message: 'Could not deleted record'
+            });
+        }
+    },
+
+    // MANAGE VENDOR LICENSES
+    async getTransactions(request, response) {
+        const params = request.body;
+        const search = (params.search) ? params.search : null;
+        const status = (params.status) ? params.status : null;
+        let PAGE_SIZE = (params.result_per_page) ? Number(params.result_per_page) : 15;
+        let page = (params.page) ? Number(params.page) : 1;
+
+        let condition = `WHERE 1`;
+        if (search) {
+            condition += ` AND (amount LIKE '%${search.split(',').join('')}%'
+            OR transaction_id LIKE '%${search}%'
+            OR external_transactionI_id LIKE '%${search}%'
+            OR amount_after_charges LIKE '%${search.split(',').join('')}%' ) `;
+        }
+        if (status) {
+            if (status === 'Completed') {
+                condition += ` AND ( paid ='YES' ) `;
+            } else if (status === 'Pending') {
+                condition += ` AND ( paid ='NO' ) `;
+            } else if (status === 'Cancelled') {
+                condition += ` AND ( paid ='CANCELLED' ) `;
+            }
+        }
+
+        const paging = new Pagination(conf.db_config);
+        paging.rawQuery(`select * from ${transactions} ${condition} ORDER BY id DESC `)
+        paging.result_per_page(PAGE_SIZE);
+        paging.pageNum(page)
+
+        await paging.run();
+        if (paging.count() > 0) {
+            let results = paging.results();
+            for (let index = 0; index < results.length; index++) {
+                const element = results[index];
+                results[index].amount = functions.formatMoney(element.amount);
+                results[index].amount_after_charges = functions.formatMoney(element.amount_after_charges);
+                results[index].transaction_charges = functions.formatMoney(element.transaction_charges);
+                if (element.paid === 'YES') {
+                    results[index].status = 'Completed'
+                } else if (element.paid === 'NO') {
+                    results[index].status = 'Pending'
+                } else if (element.paid === 'CANCELLED') {
+                    results[index].status = 'Cancelled'
+                }
+                results[index].transaction_charges = functions.formatMoney(element.transaction_charges);
+            }
+            response.status(200).json({
+                success: true,
+                transactions: results,
+                pagination: paging.pagination()
+            });
+        } else {
+            response.status(200).json({
+                success: false,
+                message: 'No transactions available',
+                pagination: paging.pagination()
+            });
+        }
+        paging.reset();
+    },
+    async getTransaction(request, response) {
+        const params = request.body;
+        const id = (params.id) ? params.id : null;
+
+        const db = new mysql(conf.db_config);
+        await db.query(`select * from ${transactions} where id=${id} `)
+        if (db.count() > 0) {
+            let result = db.first();
+            const element = result;
+            result.amount = functions.formatMoney(element.amount);
+            result.amount_after_charges = functions.formatMoney(element.amount_after_charges);
+            result.transaction_charges = functions.formatMoney(element.transaction_charges);
+            if (element.paid === 'YES') {
+                result.status = 'Completed'
+            } else if (element.paid === 'NO') {
+                result.status = 'Pending'
+            } else if (element.paid === 'CANCELLED') {
+                results[index].status = 'Cancelled'
+            }
+
+            response.status(200).json({
+                success: true,
+                transaction: result,
+            });
+        } else {
+            response.status(200).json({
+                success: false,
+                message: 'No transactions available',
             });
         }
     },

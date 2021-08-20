@@ -7,6 +7,7 @@ const conf = Configuration.getConfig();
 const encryption = require('../library/encryption');
 const encrypt = new encryption();
 const AdminController = require('../controllers/admin')
+const { Flutterwave } = require('../library/Flutterwave');
 
 const fs = require('fs')
 
@@ -18,6 +19,13 @@ const users_map_location = "users_map_location";
 const license_table = "license";
 const users_role_table = "users_role";
 const termination_request = "termination_request";
+const transactions = "transactions";
+const vendor_licenses = "vendor_licenses";
+const vendor_license_table = "vendor_license";
+const license_order = "license_order";
+
+//Flutter wave secrete key
+const flutterwaveKey = "FLWSECK_TEST-1ffe071b921a3cf1d0b0fbeee0b5c31c-X";
 
 module.exports = {
     async feedback(request, response) {
@@ -515,6 +523,7 @@ module.exports = {
     async licenseStatus(request, response) {
         const params = request.body
         const agent_code = (params.agent_code) ? params.agent_code : null;
+        const vendor_phone = (params.vendor_phone) ? params.vendor_phone : null;
 
         if (!agent_code) {
             response.status(403).json({
@@ -523,47 +532,72 @@ module.exports = {
             });
             return;
         }
-
-        let condition = `WHERE user.account_type = 'agent' AND user.code=${agent_code}`;
+        if (!vendor_phone) {
+            response.status(403).json({
+                message: 'Please provide vendor_phone',
+                success: false
+            });
+            return;
+        }
 
         const paging = new Pagination(conf.db_config);
-        paging.rawQuery(`SELECT 
-        user.id,
-        user.name,
-        user.phone,
-        user.gender,
-        user.address,
-        user.account_type,
-        user.code,
-        user.status,
-        user.created,
-        lc.license_type,
-        lc.vendor_limit,
-        lc.acquired,
-        lc.expires
-        FROM ${users_table} user LEFT JOIN ${license_table} lc ON user.id=lc.user_id ${condition} ORDER BY id DESC `);
+        if (agent_code === '00000000') {
+            let condition = `WHERE user.account_type = 'vendor' AND user.phone=${vendor_phone}`;
+            paging.rawQuery(`SELECT 
+            user.id,
+            user.name,
+            user.phone,
+            user.gender,
+            user.address,
+            user.account_type,
+            user.code,
+            user.status,
+            user.created,
+            lc.license_type,
+            lc.status lc_status,
+            lc.acquired,
+            lc.expires
+            FROM ${users_table} user LEFT JOIN ${vendor_license_table} lc ON user.id=lc.user_id ${condition} ORDER BY lc.id DESC `);
+        } else {
+            let condition = `WHERE user.account_type = 'agent' AND user.code=${agent_code}`;
+            paging.rawQuery(`SELECT 
+            user.id,
+            user.name,
+            user.phone,
+            user.gender,
+            user.address,
+            user.account_type,
+            user.code,
+            user.status,
+            user.created,
+            lc.license_type,
+            lc.status lc_status,
+            lc.vendor_limit,
+            lc.acquired,
+            lc.expires
+            FROM ${users_table} user LEFT JOIN ${license_table} lc ON user.id=lc.user_id ${condition} ORDER BY lc.id DESC `);
+        }
+
         paging.result_per_page(1);
         paging.pageNum(1)
 
         await paging.run();
         if (paging.count() > 0) {
-            let agents = paging.results()
-            for (let index = 0; index < agents.length; index++) {
-                const agent = agents[index];
-                const endDate = new Date(agent.expires);
-                const today = new Date();
-                var diff = functions.getDateDiff(today, endDate);
-                agents[index].days_left = diff
-                agents[index].license_status = "Expired"
-                if (agent.expires === null) {
-                    agents[index].license_status = "No License"
-                } else if (agent.expires !== null && agent.days_left > 0) {
-                    agents[index].license_status = "Active"
-                }
+            let agents = paging.first()
+            const agent = agents;
+            const endDate = new Date(agent.expires);
+            const today = new Date();
+            var diff = functions.getDateDiff(today, endDate);
+            agents.days_left = diff
+            agents.license_status = "Expired"
+            if (agent.expires === null) {
+                agents.license_status = "No License"
+            } else if (agent.expires !== null && agent.days_left > 0) {
+                agent.license_status = agent.lc_status
             }
             response.status(200).json({
                 success: true,
-                agent: agents[0]
+                agent: agents
             });
         } else {
             response.status(200).json({
@@ -628,7 +662,7 @@ module.exports = {
         }
 
         const paging = new Pagination(conf.db_config);
-        paging.rawQuery(`select tr.id, tr.created time, user.id user_id, user.phone, user.name from ${termination_request} tr left join ${users_table} user on tr.user_id=user.id ${condition} ORDER BY id DESC `)
+        paging.rawQuery(`select tr.id, tr.created time, user.id user_id, user.phone, user.name from ${termination_request} tr join ${users_table} user on tr.user_id=user.id ${condition} ORDER BY id DESC `)
         paging.result_per_page(PAGE_SIZE);
         paging.pageNum(page)
 
@@ -718,4 +752,199 @@ module.exports = {
             });
         }
     },
-};
+    async makePayment(request, response, next) {
+        const params = request.body;
+        const name = (params.name) ? params.name : null;
+        const phone = (params.phone) ? params.phone : null;
+        const license_id = (params.license_id) ? params.license_id : null;
+        let redirect_link = (params.redirect_link) ? params.redirect_link : null;
+
+        if (!name) {
+            response.status(403).json({
+                message: 'Please provide name',
+                success: false
+            });
+            return;
+        }
+        if (!phone) {
+            response.status(403).json({
+                message: 'Please provide phone',
+                success: false
+            });
+            return;
+        }
+        if (!license_id) {
+            response.status(403).json({
+                message: 'Please provide license id',
+                success: false
+            });
+            return;
+        }
+        if (!redirect_link) {
+            redirect_link = `${conf.site_link}/payment/`
+        }
+
+        const db = new mysql(conf.db_config);
+
+        // use the license_id to get the price
+        await db.query(`SELECT * FROM ${vendor_licenses} WHERE id=${license_id} ORDER BY id LIMIT 1`);
+        if (db.count() <= 0) {
+            response.status(403).json({
+                success: false,
+                message: 'Selected license not found',
+            });
+        }
+        const license_data = db.first();
+
+        function pad(s) { return (s < 10) ? '0' + s : s; }
+        var d = new Date();
+        const acquired = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+        d.setFullYear(d.getFullYear() + 1)
+        const expires = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+
+        // use the user phone to get user information
+        await db.query(`SELECT * FROM ${users_table} WHERE phone=${phone} ORDER BY id LIMIT 1`);
+        if (db.count() <= 0) {
+            response.status(403).json({
+                success: false,
+                message: 'Account not found',
+            });
+            return
+        }
+        const user_data = db.first();
+
+        const referenceNumber = await functions.getUniqueNumber(transactions, 'transaction_id', 12, false);
+        const transactionID = `RF${referenceNumber}`;
+        let flutterWave = new Flutterwave();
+        flutterWave.setRedirectTo(redirect_link)
+            .setAuthorization(flutterwaveKey)
+            .setCurrency('GHS')
+            .setPaymentOption(Flutterwave.payment_options_gh[1].key)
+            .setTransactionAmount(license_data.price)
+            .setRefferenceNumber(transactionID)
+            .setCustomer(name, 'system@nla.com', phone)
+
+        let result = await flutterWave.pay();
+        if (result.success) {
+            const transaction = {
+                amount_after_charges: 0,
+                transaction_id: transactionID,
+                payment_type: Flutterwave.payment_options_gh[1].key,
+                payment_description: 'purchase of license',
+                amount: license_data.price,
+                currency: 'GHS',
+                transaction_charges: 0,
+                paid: 'NO',
+            }
+            await db.insert(transactions, transaction)
+            await db.insert(license_order, {
+                user_id: user_data.id,
+                license_type: license_data.type,
+                acquired: acquired,
+                expires: expires,
+                status: 'Active',
+                ordernumber: transactionID,
+            })
+        }
+        response.status(200).json(result);
+    },
+    async verifyPayment(request, response, next) {
+        const params = request.body;
+        const transaction_id = (params.transaction_id) ? params.transaction_id : null;
+
+        if (!transaction_id) {
+            response.status(403).json({
+                message: 'Please provide transaction id',
+                success: false
+            });
+            return;
+        }
+
+        const db = new mysql(conf.db_config);
+        await db.query(`SELECT * FROM ${transactions} WHERE external_transactionI_id = ${transaction_id} LIMIT 1`)
+        if (db.count() > 0) {
+            const transData = db.first();
+            if (transData.paid === 'YES') {
+                response.status(200).json({
+                    success: true,
+                    status: 'completed',
+                    message: 'Transaction completed successfully'
+                });
+            } else if (transData.paid === 'NO') {
+                response.status(200).json({
+                    success: false,
+                    status: 'pending',
+                    message: 'Transaction completed successfully'
+                });
+            } else {
+                response.status(200).json({
+                    success: false,
+                    status: 'cancelled',
+                    message: 'Transaction cancelled'
+                });
+            }
+        } else {
+            let flutterWave = new Flutterwave();
+            flutterWave.settransactionId(transaction_id)
+                .setAuthorization(flutterwaveKey)
+
+            let result = await flutterWave.verifyTransaction();
+            if (result.success) {
+                console.log(result)
+                const data = result.data
+                const isSuccess = data.status === 'successful';
+                const transactionData = {
+                    amount_after_charges: data.amount_settled,
+                    external_transactionI_id: data.id,
+                    transaction_charges: data.appfee,
+                    paid: isSuccess ? "YES" : "CANCELLED",
+                }
+                await db.update(transactions, 'transaction_id', data.tx_ref, transactionData)
+                if (isSuccess) {
+                    //Activate user license
+                    await db.query(`INSERT INTO ${vendor_license_table} (user_id, license_type, acquired, expires,status)
+                    SELECT user_id, license_type, acquired, expires, status
+                    FROM ${license_order} WHERE ordernumber='${data.tx_ref}' LIMIT 1;`)
+                    response.status(200).json({
+                        success: true,
+                        status: data.status,
+                        message: 'Transaction completed successfully'
+                    });
+                } else {
+                    response.status(200).json({
+                        success: false,
+                        status: data.status,
+                        message: `Transaction ${data.status}`
+                    });
+                }
+            } else {
+                response.status(200).json({
+                    success: false,
+                    status: 'unknown',
+                    message: 'Transaction not completed'
+                });
+            }
+        }
+    },
+    async flutterwaveCallBack(request, response, next) {
+        const data = request.body;
+        const db = new mysql(conf.db_config);
+
+        const isSuccess = data.status === 'successful';
+        const transactionData = {
+            amount_after_charges: data.amount,
+            external_transactionI_id: data.id,
+            transaction_charges: data.appfee,
+            paid: isSuccess ? "YES" : "CANCELLED",
+        }
+        await db.update(transactions, 'transaction_id', data.txRef, transactionData)
+
+        //Activate user license
+        await db.query(`INSERT INTO ${vendor_license_table} (user_id, license_type, acquired, expires,status)
+        SELECT user_id, license_type, acquired, expires, status
+        FROM ${license_order} WHERE ordernumber='${data.txRef}' LIMIT 1;`)
+        response.status(200).json({
+            success: true
+        });
+    }
+}
