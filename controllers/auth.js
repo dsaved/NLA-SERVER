@@ -313,6 +313,42 @@ module.exports = {
             });
         }
     },
+    async verify_number_vendor(request, response) {
+        const params = request.body;
+        const db = new mysql(conf.db_config);
+        const phone = (params.phone) ? params.phone : null;
+        const code = (params.code) ? params.code : null;
+
+        await db.query(`select phone from ${verification_table} where phone = '${phone}' and code = '${code}'`);
+        if (db.count() > 0) {
+            await db.update(`${verification_table}`, "phone", phone, { code: 1 });
+            const queryString = `select id,name,phone,gender,address, code, account_type,status from ${users_table} where phone = '${phone}'`;
+            await db.query(queryString);
+            if (db.count() > 0) {
+                const userdata = db.first();
+                let authorization = await functions.getAuthorization(userdata.id);
+                const user = {
+                    userid: userdata.id,
+                    name: userdata.name,
+                    phone: userdata.phone,
+                    gender: userdata.gender,
+                    address: userdata.address,
+                    status: userdata.status,
+                    code: userdata.code,
+                    account_type: userdata.account_type,
+                    pages: vendorPages,
+                    permissions: agentPermissions,
+                    auth: authorization
+                }
+                response.status(200).json({ success: true, user: user, message: "welcome back" });
+            }
+        } else {
+            response.status(403).json({
+                success: false,
+                message: "invalid verification code"
+            });
+        }
+    },
     async recover(request, response) {
         const params = request.body;
         const db = new mysql(conf.db_config);

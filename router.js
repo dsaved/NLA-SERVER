@@ -11,6 +11,7 @@ module.exports = function(app) {
     app.post('/login', AuthController.login)
     app.post('/register', AuthController.register)
     app.post('/verify_number', AuthController.verify_number)
+    app.post('/verify_number_vendor', AuthController.verify_number_vendor)
     app.post('/resend_code', AuthController.resend_code)
     app.post('/recover', AuthController.recover)
 
