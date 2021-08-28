@@ -899,6 +899,7 @@ module.exports = {
                     transaction_charges: data.appfee,
                     paid: isSuccess ? "YES" : "CANCELLED",
                 }
+
                 await db.update(transactions, 'transaction_id', data.tx_ref, transactionData)
                 if (isSuccess) {
                     //Activate user license
@@ -907,7 +908,7 @@ module.exports = {
                     FROM ${license_order} WHERE ordernumber='${data.tx_ref}' LIMIT 1;`)
                     response.status(200).json({
                         success: true,
-                        status: data.status,
+                        status: 'completed',
                         message: 'Transaction completed successfully'
                     });
                 } else {
