@@ -63,7 +63,7 @@ class MYSqlPagination extends mysql {
         this.offset = (page - 1) * limit;
         const vm = this;
         if (this._query) {
-            this.execute(`${this._query}`).then(dataset => {
+            await this.execute(`${this._query}`).then(dataset => {
                 vm.total = dataset.length;
                 vm.pages = Math.ceil(vm.total / vm.limit)
                 vm.page = (vm.page < vm.pages) ? vm.page : vm.pages;
@@ -73,7 +73,7 @@ class MYSqlPagination extends mysql {
                 console.log(error)
             });
         } else {
-            this.execute(`SELECT ${this._fields} FROM ${this._table} ${this._condition}`).then(dataset => {
+            await this.execute(`SELECT ${this._fields} FROM ${this._table} ${this._condition}`).then(dataset => {
                 vm.total = dataset.length;
                 vm.pages = Math.ceil(vm.total / vm.limit)
                 vm.page = (vm.page < vm.pages) ? vm.page : vm.pages;
