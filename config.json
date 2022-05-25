@@ -6,7 +6,7 @@
         "host": "localhost",
         "user": "root",
         "password": "",
-        "database": "nla_master_db",
+        "database": "00000000000",
         "debug": false,
         "dateStrings": "date",
         "multipleStatements": true
@@ -23,7 +23,7 @@
     },
     "sms": {
         "host": "https://apps.mnotify.net/smsapi?",
-        "key": "SfnBr19znu402desDFXR7fq6w",
+        "key": "00000000000",
         "sender": "Dsaved"
     }
 }
